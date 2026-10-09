@@ -1,0 +1,56 @@
+name: Fetch news
+
+on:
+  schedule:
+    - cron: "7 * * * *"   # ทุกชั่วโมง นาทีที่ 7 (UTC) — GitHub อาจดีเลย์ได้ไม่กี่นาที
+    - cron: "37 2 * * 1"  # วันจันทร์ 09:37 เวลาไทย: อัปเดตรายชื่อ S&P 500
+  workflow_dispatch: {}    # กดรันเองได้ที่แท็บ Actions
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fetch-news
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Update S&P 500 list
+        if: github.event.schedule == '37 2 * * 1'
+        run: npm run update-sp500
+
+      - name: Fetch and summarize news
+        run: npm run fetch
+        env:
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.5-flash-lite' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+
+      # Vercel Hobby + repo private จะ deploy เฉพาะ commit ที่ "เจ้าของบัญชี" เป็นผู้เขียน
+      # จึง commit ในชื่อเจ้าของ repo (อีเมล noreply ของ GitHub) แทน github-actions[bot]
+      - name: Commit data
+        run: |
+          git config user.name  "${{ github.repository_owner }}"
+          git config user.email "${{ github.repository_owner_id }}+${{ github.repository_owner }}@users.noreply.github.com"
+          git add data "ข่าวด่วนรายวัน"
+          if git diff --cached --quiet; then
+            echo "ไม่มีข่าวใหม่"
+            exit 0
+          fi
+          git commit -m "news: $(TZ=Asia/Bangkok date '+%Y-%m-%d %H:%M')"
+          git pull --rebase
+          git push
